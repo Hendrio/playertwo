@@ -81,7 +81,7 @@ class TrainingDashboard:
         self.step_history = []
         
         # Update timer
-        self.update_interval = 0.1  # 10 FPS
+        self.update_interval = 0.2  # 5 FPS (reduced from 10 to minimize flicker)
     
     def build(self):
         """Build the dashboard UI."""
