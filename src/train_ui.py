@@ -11,17 +11,50 @@ Usage:
 import os
 import sys
 import argparse
+import logging
+import warnings
 import yaml
 import time
 import threading
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import torch
 import numpy as np
 
+# Suppress gym deprecation warnings (gym-super-mario-bros uses old API)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="gym")
+warnings.filterwarnings("ignore", category=UserWarning, module="gym")
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Configure training logging
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "training.log"
+
+logger = logging.getLogger("training")
+logger.setLevel(logging.DEBUG)
+
+# File handler with rotation (10MB max, keep 5 backups)
+file_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8"
+)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+))
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter("[Training] %(message)s"))
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 from model.network import MarioNetwork
 from policy.ppo import PPOAgent
@@ -55,60 +88,77 @@ def training_loop(config: dict, test_mode: bool = False):
     
     # Device
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[Training] Using device: {device}")
+    logger.info(f"Using device: {device}")
     
     # Wait for start signal from UI (or start immediately in test mode)
     if not test_mode:
-        print("[Training] Waiting for start signal from UI...")
+        logger.info("Waiting for start signal from UI...")
         while not state.is_training() and not state.should_stop():
             time.sleep(0.1)
     else:
         state.start_training()
     
     if state.should_stop():
-        print("[Training] Stopped before starting")
+        logger.info("Stopped before starting")
         return
     
-    print("[Training] Creating environment...")
+    logger.info("Creating environment...")
     
     # Create environment (we need access to raw frames for visualization)
-    import gym_super_mario_bros
-    from nes_py.wrappers import JoypadSpace
-    from game.env import MARIO_ACTIONS, GrayscaleResizeWrapper, FrameStackWrapper, FrameSkipWrapper, NormalizeObservationWrapper
+    try:
+        import gym_super_mario_bros
+        from nes_py.wrappers import JoypadSpace
+        from game.env import (
+            MARIO_ACTIONS, GrayscaleResizeWrapper, FrameStackWrapper, 
+            FrameSkipWrapper, NormalizeObservationWrapper, GymV21ToGymnasiumWrapper
+        )
+        
+        # Create base environment (old gym API)
+        base_env = gym_super_mario_bros.make(config['environment']['name'])
+        base_env = JoypadSpace(base_env, MARIO_ACTIONS)
+        
+        # Convert to gymnasium API
+        base_env = GymV21ToGymnasiumWrapper(base_env)
+        
+        # We'll manually handle preprocessing to capture raw frames
+        frame_skip = config['environment']['frame_skip']
+        frame_stack = config['environment']['frame_stack']
+        frame_size = config['environment']['frame_size']
+        
+        # Apply frame skip wrapper
+        base_env = FrameSkipWrapper(base_env, skip=frame_skip)
+        
+        # Store reference to get raw RGB frames
+        raw_env = base_env
+        
+        # Apply remaining wrappers
+        env = GrayscaleResizeWrapper(base_env, width=frame_size, height=frame_size)
+        env = FrameStackWrapper(env, n_frames=frame_stack)
+        env = NormalizeObservationWrapper(env)
+        
+        # Wrap with custom rewards
+        env = CustomRewardWrapper(
+            env,
+            velocity_scale=config['rewards']['velocity_scale'],
+            clock_penalty=config['rewards']['clock_penalty'],
+            death_penalty=config['rewards']['death_penalty']
+        )
+    except OverflowError as e:
+        logger.error(f"NumPy compatibility error: {e}")
+        logger.error("This is likely due to numpy>=2.0 incompatibility with nes-py.")
+        logger.error("Fix: pip install 'numpy>=1.24.0,<2.0.0'")
+        state.training_ended()
+        return
+    except Exception as e:
+        logger.error(f"Failed to create environment: {e}", exc_info=True)
+        state.training_ended()
+        return
     
-    # Create base environment
-    base_env = gym_super_mario_bros.make(config['environment']['name'])
-    base_env = JoypadSpace(base_env, MARIO_ACTIONS)
-    
-    # We'll manually handle preprocessing to capture raw frames
-    frame_skip = config['environment']['frame_skip']
-    frame_stack = config['environment']['frame_stack']
-    frame_size = config['environment']['frame_size']
-    
-    # Apply frame skip wrapper
-    base_env = FrameSkipWrapper(base_env, skip=frame_skip)
-    
-    # Store reference to get raw RGB frames
-    raw_env = base_env
-    
-    # Apply remaining wrappers
-    env = GrayscaleResizeWrapper(base_env, width=frame_size, height=frame_size)
-    env = FrameStackWrapper(env, n_frames=frame_stack)
-    env = NormalizeObservationWrapper(env)
-    
-    # Wrap with custom rewards
-    env = CustomRewardWrapper(
-        env,
-        velocity_scale=config['rewards']['velocity_scale'],
-        clock_penalty=config['rewards']['clock_penalty'],
-        death_penalty=config['rewards']['death_penalty']
-    )
-    
-    print(f"[Training] Observation space: {env.observation_space}")
-    print(f"[Training] Action space: {env.action_space}")
+    logger.info(f"Observation space: {env.observation_space}")
+    logger.info(f"Action space: {env.action_space}")
     
     # Create network
-    print("[Training] Creating network...")
+    logger.info("Creating network...")
     network = MarioNetwork(
         num_actions=config['model']['num_actions'],
         hidden_units=config['model']['hidden_units'],
@@ -117,7 +167,7 @@ def training_loop(config: dict, test_mode: bool = False):
     )
     
     # Create agent
-    print("[Training] Creating PPO agent...")
+    logger.info("Creating PPO agent...")
     agent = PPOAgent(
         network=network,
         learning_rate=config['training']['learning_rate'],
@@ -138,18 +188,18 @@ def training_loop(config: dict, test_mode: bool = False):
     n_steps = config['training']['n_steps']
     save_interval = config['checkpointing']['save_interval']
     
-    print(f"[Training] Starting training loop...")
-    print(f"[Training] Total steps: {total_steps:,}")
+    logger.info(f"Starting training loop...")
+    logger.info(f"Total steps: {total_steps:,}")
     
     # Reset environment
-    obs = env.reset()
+    obs, _ = env.reset()
     last_checkpoint_step = 0
     
     # Main training loop
     while agent.global_step < total_steps:
         # Check for stop signal
         if state.should_stop():
-            print("[Training] Stop signal received")
+            logger.info("Stop signal received")
             break
         
         # Handle pause
@@ -166,20 +216,23 @@ def training_loop(config: dict, test_mode: bool = False):
                 time.sleep(0.1)
             
             # Get raw RGB frame for visualization
-            # The raw_env has the RGB frame after step
+            # Navigate through wrapper chain to get the NES screen
             try:
-                # Access the underlying env's last frame
-                raw_frame = raw_env.env.screen.copy() if hasattr(raw_env.env, 'screen') else None
-                if raw_frame is not None:
+                # Find the underlying NES environment
+                unwrapped = env.unwrapped
+                if hasattr(unwrapped, 'screen'):
+                    raw_frame = unwrapped.screen.copy()
                     state.push_frame(raw_frame)
-            except:
+            except Exception as e:
+                logger.debug(f"Frame capture failed: {e}")
                 pass  # Frame capture failed, continue anyway
             
             # Select action
             action, log_prob, value = agent.select_action(obs)
             
             # Take step in environment
-            next_obs, reward, done, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             
             # Store transition
             agent.store_transition(obs, action, reward, done, value, log_prob)
@@ -198,7 +251,7 @@ def training_loop(config: dict, test_mode: bool = False):
             # Handle episode end
             if done:
                 state.record_episode_end(x_pos=info.get('x_pos', 0))
-                obs = env.reset()
+                obs, _ = env.reset()
             else:
                 obs = next_obs
             
@@ -221,8 +274,8 @@ def training_loop(config: dict, test_mode: bool = False):
             
             # Print progress
             info = state.get_training_info()
-            print(
-                f"[Training] Step {agent.global_step:,}/{total_steps:,} | "
+            logger.info(
+                f"Step {agent.global_step:,}/{total_steps:,} | "
                 f"Episodes: {info['episode_count']} | "
                 f"LR: {metrics['learning_rate']:.2e}"
             )
@@ -231,19 +284,19 @@ def training_loop(config: dict, test_mode: bool = False):
         if agent.global_step - last_checkpoint_step >= save_interval:
             checkpoint_path = checkpoint_dir / f"mario_step_{agent.global_step}.pt"
             agent.save(str(checkpoint_path))
-            print(f"[Training] Saved checkpoint: {checkpoint_path}")
+            logger.info(f"Saved checkpoint: {checkpoint_path}")
             last_checkpoint_step = agent.global_step
     
     # Final save
     if agent.global_step > 0:
         final_path = checkpoint_dir / "mario_final.pt"
         agent.save(str(final_path))
-        print(f"[Training] Saved final model: {final_path}")
+        logger.info(f"Saved final model: {final_path}")
     
     # Cleanup
     env.close()
     state.training_ended()
-    print("[Training] Training complete!")
+    logger.info("Training complete!")
 
 
 @ui.page('/')

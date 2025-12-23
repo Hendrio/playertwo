@@ -1,19 +1,20 @@
 """
-Super Mario Bros environment wrappers.
+Super Mario Bros environment wrappers using Gymnasium API.
 
 Provides preprocessing, frame stacking, and frame skipping functionality
-for the gym-super-mario-bros environment.
+for the gym-super-mario-bros environment via shimmy compatibility layer.
 """
 
-import gym
+import gymnasium as gym
 import numpy as np
 import cv2
 from collections import deque
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Dict, Any
 
 import gym_super_mario_bros
 from nes_py.wrappers import JoypadSpace
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
+import shimmy
 
 
 # Custom action space: Right, Right+Jump, Right+Run, Jump
@@ -23,6 +24,51 @@ MARIO_ACTIONS = [
     ['right', 'B'],      # Right + Run
     ['A'],               # Jump only
 ]
+
+
+class GymV21ToGymnasiumWrapper(gym.Wrapper):
+    """
+    Wrapper to convert old gym v21 API to gymnasium API.
+    
+    gym-super-mario-bros uses the old API:
+        - reset() returns obs
+        - step() returns (obs, reward, done, info)
+    
+    gymnasium expects:
+        - reset() returns (obs, info)
+        - step() returns (obs, reward, terminated, truncated, info)
+    """
+    
+    def __init__(self, env):
+        # Don't call super().__init__ since env is not a gymnasium env
+        self._env = env
+        self.observation_space = gym.spaces.Box(
+            low=0, high=255, shape=env.observation_space.shape, dtype=np.uint8
+        )
+        self.action_space = gym.spaces.Discrete(env.action_space.n)
+    
+    @property
+    def unwrapped(self):
+        return self._env.unwrapped
+    
+    def reset(self, seed=None, options=None) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Reset and return (obs, info) tuple."""
+        obs = self._env.reset()
+        return obs, {}
+    
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        """Step and return (obs, reward, terminated, truncated, info) tuple."""
+        obs, reward, done, info = self._env.step(action)
+        # In old API, done = terminated (no truncation concept)
+        terminated = done
+        truncated = False
+        return obs, reward, terminated, truncated, info
+    
+    def render(self):
+        return self._env.render()
+    
+    def close(self):
+        return self._env.close()
 
 
 class GrayscaleResizeWrapper(gym.ObservationWrapper):
@@ -79,15 +125,15 @@ class FrameStackWrapper(gym.ObservationWrapper):
             dtype=np.uint8
         )
     
-    def reset(self, **kwargs) -> np.ndarray:
+    def reset(self, **kwargs) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Reset and fill buffer with initial observation."""
-        obs = self.env.reset(**kwargs)
+        obs, info = self.env.reset(**kwargs)
         
         # Fill buffer with initial frame
         for _ in range(self.n_frames):
             self.frames.append(obs)
         
-        return self._get_observation()
+        return self._get_observation(), info
     
     def observation(self, obs: np.ndarray) -> np.ndarray:
         """Add new frame to buffer."""
@@ -108,20 +154,21 @@ class FrameSkipWrapper(gym.Wrapper):
         super().__init__(env)
         self.skip = skip
     
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute action for skip frames."""
         total_reward = 0.0
-        done = False
+        terminated = False
+        truncated = False
         info = {}
         
         for _ in range(self.skip):
-            obs, reward, done, info = self.env.step(action)
+            obs, reward, terminated, truncated, info = self.env.step(action)
             total_reward += reward
             
-            if done:
+            if terminated or truncated:
                 break
         
-        return obs, total_reward, done, info
+        return obs, total_reward, terminated, truncated, info
 
 
 class NormalizeObservationWrapper(gym.ObservationWrapper):
@@ -146,51 +193,6 @@ class NormalizeObservationWrapper(gym.ObservationWrapper):
         return obs.astype(np.float32) / 255.0
 
 
-class MarioEnvWrapper(gym.Wrapper):
-    """
-    Full Mario environment wrapper combining all preprocessing steps.
-    
-    Applies in order:
-    1. Custom action space
-    2. Frame skip
-    3. Grayscale + resize
-    4. Frame stacking
-    5. Normalization
-    """
-    
-    def __init__(
-        self,
-        env_name: str = "SuperMarioBros-1-1-v0",
-        frame_skip: int = 4,
-        frame_stack: int = 4,
-        frame_size: int = 84
-    ):
-        # Create base environment
-        env = gym_super_mario_bros.make(env_name)
-        
-        # Apply custom action space
-        env = JoypadSpace(env, MARIO_ACTIONS)
-        
-        # Apply frame skip
-        env = FrameSkipWrapper(env, skip=frame_skip)
-        
-        # Apply grayscale and resize
-        env = GrayscaleResizeWrapper(env, width=frame_size, height=frame_size)
-        
-        # Apply frame stacking
-        env = FrameStackWrapper(env, n_frames=frame_stack)
-        
-        # Normalize observations
-        env = NormalizeObservationWrapper(env)
-        
-        super().__init__(env)
-        
-        self.env_name = env_name
-        self.frame_skip = frame_skip
-        self.frame_stack = frame_stack
-        self.frame_size = frame_size
-
-
 def make_mario_env(
     env_name: str = "SuperMarioBros-1-1-v0",
     frame_skip: int = 4,
@@ -207,14 +209,30 @@ def make_mario_env(
         frame_size: Size of resized frames
         
     Returns:
-        Wrapped environment
+        Wrapped environment with gymnasium API
     """
-    return MarioEnvWrapper(
-        env_name=env_name,
-        frame_skip=frame_skip,
-        frame_stack=frame_stack,
-        frame_size=frame_size
-    )
+    # Create base environment (old gym API)
+    env = gym_super_mario_bros.make(env_name)
+    
+    # Apply custom action space
+    env = JoypadSpace(env, MARIO_ACTIONS)
+    
+    # Convert to gymnasium API
+    env = GymV21ToGymnasiumWrapper(env)
+    
+    # Apply frame skip
+    env = FrameSkipWrapper(env, skip=frame_skip)
+    
+    # Apply grayscale and resize
+    env = GrayscaleResizeWrapper(env, width=frame_size, height=frame_size)
+    
+    # Apply frame stacking
+    env = FrameStackWrapper(env, n_frames=frame_stack)
+    
+    # Normalize observations
+    env = NormalizeObservationWrapper(env)
+    
+    return env
 
 
 if __name__ == "__main__":
@@ -224,7 +242,7 @@ if __name__ == "__main__":
     print(f"Observation space: {env.observation_space}")
     print(f"Action space: {env.action_space}")
     
-    obs = env.reset()
+    obs, info = env.reset()
     print(f"Observation shape: {obs.shape}")
     print(f"Observation dtype: {obs.dtype}")
     print(f"Observation range: [{obs.min():.2f}, {obs.max():.2f}]")
@@ -232,10 +250,11 @@ if __name__ == "__main__":
     # Take a few steps
     for i in range(10):
         action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         print(f"Step {i+1}: action={action}, reward={reward:.2f}, done={done}")
         
         if done:
-            obs = env.reset()
+            obs, info = env.reset()
     
     env.close()

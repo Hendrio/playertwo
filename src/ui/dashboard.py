@@ -7,7 +7,10 @@ Displays live game view, rewards/penalties chart, and training metrics.
 import asyncio
 import base64
 import io
+import logging
 import time
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Optional
 
 import cv2
@@ -15,6 +18,34 @@ import numpy as np
 from nicegui import ui, app
 
 from .state import TrainingState, get_training_state
+
+# Configure dashboard logging
+LOG_DIR = Path(__file__).parent.parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "dashboard.log"
+
+logger = logging.getLogger("dashboard")
+logger.setLevel(logging.DEBUG)
+
+# File handler with rotation (5MB max, keep 3 backups)
+file_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8"
+)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+))
+
+# Console handler for warnings and above
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)
+console_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+logger.info("Dashboard logging initialized")
 
 
 class TrainingDashboard:
@@ -35,6 +66,7 @@ class TrainingDashboard:
         Args:
             state: TrainingState instance (uses global if None)
         """
+        logger.info("Initializing TrainingDashboard")
         self.state = state or get_training_state()
         
         # UI elements (will be initialized in build())
@@ -53,6 +85,7 @@ class TrainingDashboard:
     
     def build(self):
         """Build the dashboard UI."""
+        logger.info("Building dashboard UI")
         
         # Apply dark theme and styling
         ui.dark_mode().enable()
@@ -147,28 +180,35 @@ class TrainingDashboard:
             with ui.card().classes('chart-container w-full'):
                 ui.label('📊 Rewards Over Time').classes('text-lg font-semibold text-white mb-2')
                 
-                self.rewards_chart = ui.chart({
-                    'chart': {'type': 'line', 'backgroundColor': 'transparent', 'height': 250},
-                    'title': {'text': ''},
+                self.rewards_chart = ui.echart({
+                    'backgroundColor': 'transparent',
+                    'tooltip': {'trigger': 'axis'},
+                    'legend': {
+                        'data': ['Total Reward', 'Velocity', 'Clock'],
+                        'textStyle': {'color': '#a0a0a0'}
+                    },
                     'xAxis': {
-                        'title': {'text': 'Step'},
-                        'labels': {'style': {'color': '#a0a0a0'}},
-                        'gridLineColor': '#333'
+                        'type': 'category',
+                        'name': 'Step',
+                        'nameTextStyle': {'color': '#a0a0a0'},
+                        'axisLabel': {'color': '#a0a0a0'},
+                        'axisLine': {'lineStyle': {'color': '#333'}},
+                        'data': []
                     },
                     'yAxis': {
-                        'title': {'text': 'Reward', 'style': {'color': '#a0a0a0'}},
-                        'labels': {'style': {'color': '#a0a0a0'}},
-                        'gridLineColor': '#333'
-                    },
-                    'legend': {
-                        'itemStyle': {'color': '#a0a0a0'}
+                        'type': 'value',
+                        'name': 'Reward',
+                        'nameTextStyle': {'color': '#a0a0a0'},
+                        'axisLabel': {'color': '#a0a0a0'},
+                        'axisLine': {'lineStyle': {'color': '#333'}},
+                        'splitLine': {'lineStyle': {'color': '#333'}}
                     },
                     'series': [
-                        {'name': 'Total Reward', 'data': [], 'color': '#e94560'},
-                        {'name': 'Velocity', 'data': [], 'color': '#00d9ff'},
-                        {'name': 'Clock', 'data': [], 'color': '#ffc107'},
+                        {'name': 'Total Reward', 'type': 'line', 'data': [], 'itemStyle': {'color': '#e94560'}},
+                        {'name': 'Velocity', 'type': 'line', 'data': [], 'itemStyle': {'color': '#00d9ff'}},
+                        {'name': 'Clock', 'type': 'line', 'data': [], 'itemStyle': {'color': '#ffc107'}},
                     ]
-                }).classes('w-full')
+                }).classes('w-full h-64')
             
             # Loss chart
             with ui.card().classes('chart-container w-full'):
@@ -267,10 +307,12 @@ class TrainingDashboard:
             step_interval = max(1, len(recent_steps) // 50)
             sampled = recent_steps[::step_interval]
             
-            total_rewards = [[s.step, s.reward] for s in sampled]
-            velocity_rewards = [[s.step, s.velocity_reward] for s in sampled]
-            clock_penalties = [[s.step, s.clock_penalty] for s in sampled]
+            steps = [s.step for s in sampled]
+            total_rewards = [s.reward for s in sampled]
+            velocity_rewards = [s.velocity_reward for s in sampled]
+            clock_penalties = [s.clock_penalty for s in sampled]
             
+            self.rewards_chart.options['xAxis']['data'] = steps
             self.rewards_chart.options['series'][0]['data'] = total_rewards
             self.rewards_chart.options['series'][1]['data'] = velocity_rewards
             self.rewards_chart.options['series'][2]['data'] = clock_penalties
@@ -278,14 +320,17 @@ class TrainingDashboard:
     
     def _on_start(self):
         """Handle start button click."""
+        logger.info("User clicked START button")
         self.state.start_training()
     
     def _on_pause(self):
         """Handle pause button click."""
+        logger.info("User clicked PAUSE button")
         self.state.pause_training()
     
     def _on_stop(self):
         """Handle stop button click."""
+        logger.info("User clicked STOP button")
         self.state.stop_training()
 
 
@@ -304,6 +349,7 @@ def main_page():
 
 def run_dashboard(host: str = '127.0.0.1', port: int = 8080):
     """Run the dashboard server."""
+    logger.info(f"Starting dashboard server at http://{host}:{port}")
     ui.run(host=host, port=port, title='Mario RL Training', reload=False)
 
 

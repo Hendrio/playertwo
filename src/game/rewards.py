@@ -1,5 +1,5 @@
 """
-Custom reward wrapper for Super Mario Bros.
+Custom reward wrapper for Super Mario Bros using Gymnasium API.
 
 Implements the reward function:
     Reward = velocity + clock + death
@@ -10,7 +10,7 @@ Where:
     - death (d): -15 penalty for dying
 """
 
-import gym
+import gymnasium as gym
 import numpy as np
 from typing import Tuple, Dict, Any
 
@@ -49,24 +49,24 @@ class CustomRewardWrapper(gym.Wrapper):
         self._prev_x_pos = 0
         self._prev_life = 2  # Mario starts with 2 lives
     
-    def reset(self, **kwargs) -> np.ndarray:
+    def reset(self, **kwargs) -> Tuple[np.ndarray, Dict[str, Any]]:
         """Reset and initialize tracking variables."""
-        obs = self.env.reset(**kwargs)
+        obs, info = self.env.reset(**kwargs)
         
         # Reset tracking
         self._prev_x_pos = 0
         self._prev_life = 2
         
-        return obs
+        return obs, info
     
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, Dict[str, Any]]:
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
         Execute action and compute custom reward.
         
         The original reward from gym-super-mario-bros is replaced with
         our custom reward function.
         """
-        obs, original_reward, done, info = self.env.step(action)
+        obs, original_reward, terminated, truncated, info = self.env.step(action)
         
         # Get current state from info
         x_pos = info.get('x_pos', 0)
@@ -101,7 +101,7 @@ class CustomRewardWrapper(gym.Wrapper):
         info['reward_death'] = death
         info['reward_total'] = reward
         
-        return obs, reward, done, info
+        return obs, reward, terminated, truncated, info
 
 
 def wrap_with_custom_reward(
@@ -137,12 +137,13 @@ if __name__ == "__main__":
     env = make_mario_env()
     env = wrap_with_custom_reward(env, velocity_scale=1.0, clock_penalty=-0.01, death_penalty=-15.0)
     
-    obs = env.reset()
+    obs, info = env.reset()
     
     total_reward = 0
     for i in range(100):
         action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         total_reward += reward
         
         if i % 10 == 0:

@@ -48,8 +48,17 @@ playertwo/
 python -m venv venv
 venv\Scripts\activate  # Windows
 
-# Install dependencies
+# Install dependencies (Python 3.12)
 pip install -r requirements.txt
+```
+
+### Windows: Pre-built Wheels (Recommended)
+
+If you encounter C++ build errors when installing `nes-py`, use pre-built wheels:
+
+```bash
+pip install nes-py --only-binary :all:
+pip install gym-super-mario-bros
 ```
 
 ## Training
