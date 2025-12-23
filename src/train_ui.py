@@ -60,7 +60,7 @@ from model.network import MarioNetwork
 from policy.ppo import PPOAgent
 from game.env import make_mario_env
 from game.rewards import CustomRewardWrapper
-from ui.dashboard import run_dashboard, create_dashboard
+from ui.pages.dashboard import run_dashboard, create_dashboard
 from ui.state import get_training_state, reset_training_state
 
 from nicegui import ui, app
