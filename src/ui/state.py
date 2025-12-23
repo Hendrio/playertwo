@@ -76,6 +76,9 @@ class TrainingState:
         self._is_training: bool = False
         self._should_stop: bool = False
         self._is_paused: bool = False
+        
+        # Audio event queue (for UI to poll)
+        self._audio_events: deque = deque(maxlen=20)
     
     # Frame management
     def push_frame(self, frame: np.ndarray):
@@ -221,6 +224,29 @@ class TrainingState:
         """Signal that training has ended."""
         with self._lock:
             self._is_training = False
+    
+    # Audio event methods
+    def push_audio_event(self, event_type: str):
+        """
+        Push an audio event to be handled by the UI.
+        
+        Args:
+            event_type: Type of audio event ('death', 'level_complete', etc.)
+        """
+        with self._lock:
+            self._audio_events.append(event_type)
+    
+    def pop_audio_events(self) -> List[str]:
+        """
+        Get and clear all pending audio events.
+        
+        Returns:
+            List of audio event types
+        """
+        with self._lock:
+            events = list(self._audio_events)
+            self._audio_events.clear()
+            return events
 
 
 # Global state instance

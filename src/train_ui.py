@@ -251,6 +251,13 @@ def training_loop(config: dict, test_mode: bool = False):
             # Handle episode end
             if done:
                 state.record_episode_end(x_pos=info.get('x_pos', 0))
+                
+                # Push audio event for death or level completion
+                if info.get('flag_get', False):
+                    state.push_audio_event('level_complete')
+                else:
+                    state.push_audio_event('death')
+                
                 obs, _ = env.reset()
             else:
                 obs = next_obs

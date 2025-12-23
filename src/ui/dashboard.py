@@ -18,6 +18,7 @@ import numpy as np
 from nicegui import ui, app
 
 from .state import TrainingState, get_training_state
+from .audio import AudioManager, AudioEvent, get_audio_manager
 
 # Configure dashboard logging
 LOG_DIR = Path(__file__).parent.parent.parent / "logs"
@@ -68,11 +69,13 @@ class TrainingDashboard:
         """
         logger.info("Initializing TrainingDashboard")
         self.state = state or get_training_state()
+        self.audio = get_audio_manager()
         
         # UI elements (will be initialized in build())
         self.game_image: Optional[ui.image] = None
         self.rewards_chart: Optional[ui.chart] = None
         self.metrics_labels: dict = {}
+        self.mute_button: Optional[ui.button] = None
         
         # Chart data
         self.reward_history = []
@@ -128,9 +131,15 @@ class TrainingDashboard:
                 ui.label('🎮 Mario RL Training Dashboard').classes('text-3xl font-bold text-white')
                 
                 with ui.row().classes('gap-2'):
+                    # Audio mute button
+                    self.mute_button = ui.button('🔊', on_click=self._on_toggle_mute).props('flat')
+                    
                     ui.button('▶ Start', on_click=self._on_start).props('color=positive')
                     ui.button('⏸ Pause', on_click=self._on_pause).props('color=warning')
                     ui.button('⏹ Stop', on_click=self._on_stop).props('color=negative')
+            
+            # Build audio elements (hidden)
+            self.audio.build()
             
             # Main content row
             with ui.row().classes('w-full gap-4'):
@@ -266,6 +275,9 @@ class TrainingDashboard:
     
     async def _update_ui(self):
         """Periodic UI update callback."""
+        # Process audio events from training loop
+        self._process_audio_events()
+        
         # Update game frame
         frame = self.state.get_current_frame()
         if frame is not None:
@@ -322,6 +334,7 @@ class TrainingDashboard:
         """Handle start button click."""
         logger.info("User clicked START button")
         self.state.start_training()
+        self.audio.handle_event(AudioEvent.TRAINING_START)
     
     def _on_pause(self):
         """Handle pause button click."""
@@ -332,6 +345,24 @@ class TrainingDashboard:
         """Handle stop button click."""
         logger.info("User clicked STOP button")
         self.state.stop_training()
+        self.audio.handle_event(AudioEvent.TRAINING_STOP)
+    
+    def _on_toggle_mute(self):
+        """Handle mute button click."""
+        is_muted = self.audio.toggle_mute()
+        icon = '🔇' if is_muted else '🔊'
+        self.mute_button.set_text(icon)
+        logger.info(f"Audio muted: {is_muted}")
+    
+    def _process_audio_events(self):
+        """Process pending audio events from the training loop."""
+        events = self.state.pop_audio_events()
+        for event_type in events:
+            try:
+                event = AudioEvent(event_type)
+                self.audio.handle_event(event)
+            except ValueError:
+                logger.warning(f"Unknown audio event: {event_type}")
 
 
 def create_dashboard(state: Optional[TrainingState] = None) -> TrainingDashboard:
