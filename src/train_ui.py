@@ -158,10 +158,12 @@ def training_loop(config: dict, test_mode: bool = False):
     logger.info(f"Action space: {env.action_space}")
     
     # Create network
-    logger.info("Creating network...")
+    backbone_type = config['model'].get('backbone', 'mobilenetv2')
+    logger.info(f"Creating network with {backbone_type} backbone...")
     network = MarioNetwork(
         num_actions=config['model']['num_actions'],
         hidden_units=config['model']['hidden_units'],
+        backbone_type=backbone_type,
         backbone_pretrained=config['model']['backbone_pretrained'],
         freeze_backbone=config['model']['freeze_backbone']
     )

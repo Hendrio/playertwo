@@ -12,7 +12,7 @@ environment:
     - "jump"
 
 model:
-  backbone: "mobilenetv2"
+  backbone: "convnextv2"  # Options: "mobilenetv2", "convnextv2"
   backbone_pretrained: true
   freeze_backbone: false
   hidden_units: 512

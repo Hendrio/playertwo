@@ -1,12 +1,12 @@
 """
-Mario RL Network combining MobileNetV2 backbone with actor-critic heads.
+Mario RL Network combining backbone (MobileNetV2 or ConvNeXt V2) with actor-critic heads.
 """
 
 import torch
 import torch.nn as nn
 from typing import Tuple
 
-from .backbone import MobileNetV2Backbone
+from .backbone import get_backbone
 
 
 class MarioNetwork(nn.Module):
@@ -14,7 +14,7 @@ class MarioNetwork(nn.Module):
     Actor-Critic network for Mario RL agent.
     
     Architecture:
-        - MobileNetV2 backbone (feature extractor)
+        - Backbone (MobileNetV2 or ConvNeXt V2) for feature extraction
         - Actor head: MLP that outputs action logits
         - Critic head: MLP that outputs state value
     
@@ -28,6 +28,7 @@ class MarioNetwork(nn.Module):
         self,
         num_actions: int = 4,
         hidden_units: int = 512,
+        backbone_type: str = "mobilenetv2",
         backbone_pretrained: bool = True,
         freeze_backbone: bool = False
     ):
@@ -37,13 +38,15 @@ class MarioNetwork(nn.Module):
         Args:
             num_actions: Number of discrete actions (default: 4)
             hidden_units: Size of hidden layer in MLP heads (default: 512)
-            backbone_pretrained: Whether to use pretrained MobileNetV2
+            backbone_type: Type of backbone ("mobilenetv2", "convnextv2")
+            backbone_pretrained: Whether to use pretrained backbone
             freeze_backbone: Whether to freeze backbone weights
         """
         super().__init__()
         
-        # MobileNetV2 backbone
-        self.backbone = MobileNetV2Backbone(
+        # Create backbone using factory function
+        self.backbone = get_backbone(
+            backbone_type=backbone_type,
             pretrained=backbone_pretrained,
             freeze=freeze_backbone
         )
